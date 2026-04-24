@@ -1,149 +1,95 @@
-from __future__ import absolute_import
-from __future__ import division
-from __future__ import print_function
-
 import numpy as np
 import tensorflow as tf
-from sklearn.utils import shuffle
+import os
+import gzip
+import matplotlib.pyplot as plt
 
-tf.logging.set_verbosity(tf.logging.INFO)
-
-from tensorflow.examples.tutorials.mnist import input_data
-
-DATA_DIR = './data/fashion'
-
-
-def cnn_model_fn(features, labels, mode):
-    """Model function for CNN."""
-    # Input Layer
-    # Reshape X to 4-D tensor: [batch_size, width, height, channels]
-    # MNIST images are 28x28 pixels, and have one color channel
-    input_layer = tf.reshape(features["x"], [-1, 28, 28, 1])
-
-    # Convolutional Layer #1
-    # Computes 32 features using a 5x5 filter with ReLU activation.
-    # Padding is added to preserve width and height.
-    # Input Tensor Shape: [batch_size, 28, 28, 1]
-    # Output Tensor Shape: [batch_size, 28, 28, 32]
-    conv1 = tf.layers.conv2d(
-        inputs=input_layer,
-        filters=32,
-        kernel_size=[5, 5],
-        padding="same",
-        activation=tf.nn.relu)
-
-    # Pooling Layer #1
-    # First max pooling layer with a 2x2 filter and stride of 2
-    # Input Tensor Shape: [batch_size, 28, 28, 32]
-    # Output Tensor Shape: [batch_size, 14, 14, 32]
-    pool1 = tf.layers.max_pooling2d(inputs=conv1, pool_size=[2, 2], strides=2)
-
-    # Convolutional Layer #2
-    # Computes 64 features using a 5x5 filter.
-    # Padding is added to preserve width and height.
-    # Input Tensor Shape: [batch_size, 14, 14, 32]
-    # Output Tensor Shape: [batch_size, 14, 14, 64]
-    conv2 = tf.layers.conv2d(
-        inputs=pool1,
-        filters=64,
-        kernel_size=[5, 5],
-        padding="same",
-        activation=tf.nn.relu)
-
-    # Pooling Layer #2
-    # Second max pooling layer with a 2x2 filter and stride of 2
-    # Input Tensor Shape: [batch_size, 14, 14, 64]
-    # Output Tensor Shape: [batch_size, 7, 7, 64]
-    pool2 = tf.layers.max_pooling2d(inputs=conv2, pool_size=[2, 2], strides=2)
-
-    # Flatten tensor into a batch of vectors
-    # Input Tensor Shape: [batch_size, 7, 7, 64]
-    # Output Tensor Shape: [batch_size, 7 * 7 * 64]
-    pool2_flat = tf.reshape(pool2, [-1, 7 * 7 * 64])
-
-    # Dense Layer
-    # Densely connected layer with 1024 neurons
-    # Input Tensor Shape: [batch_size, 7 * 7 * 64]
-    # Output Tensor Shape: [batch_size, 1024]
-    dense = tf.layers.dense(inputs=pool2_flat, units=1024, activation=tf.nn.relu)
-
-    # Add dropout operation; 0.6 probability that element will be kept
-    dropout = tf.layers.dropout(
-        inputs=dense, rate=0.4, training=mode == tf.estimator.ModeKeys.TRAIN)
-
-    # Logits layer
-    # Input Tensor Shape: [batch_size, 1024]
-    # Output Tensor Shape: [batch_size, 10]
-    logits = tf.layers.dense(inputs=dropout, units=10)
-
-    predictions = {
-        # Generate predictions (for PREDICT and EVAL mode)
-        "classes": tf.argmax(input=logits, axis=1),
-        # Add `softmax_tensor` to the graph. It is used for PREDICT and by the
-        # `logging_hook`.
-        "probabilities": tf.nn.softmax(logits, name="softmax_tensor")
-    }
-    if mode == tf.estimator.ModeKeys.PREDICT:
-        return tf.estimator.EstimatorSpec(mode=mode, predictions=predictions)
-
-    # Calculate Loss (for both TRAIN and EVAL modes)
-    onehot_labels = tf.one_hot(indices=tf.cast(labels, tf.int32), depth=10)
-    loss = tf.losses.softmax_cross_entropy(
-        onehot_labels=onehot_labels, logits=logits)
-
-    # Configure the Training Op (for TRAIN mode)
-    if mode == tf.estimator.ModeKeys.TRAIN:
-        optimizer = tf.train.GradientDescentOptimizer(learning_rate=0.001)
-        train_op = optimizer.minimize(
-            loss=loss,
-            global_step=tf.train.get_global_step())
-        return tf.estimator.EstimatorSpec(mode=mode, loss=loss, train_op=train_op)
-
-    # Add evaluation metrics (for EVAL mode)
-    eval_metric_ops = {
-        "accuracy": tf.metrics.accuracy(
-            labels=labels, predictions=predictions["classes"])}
-    return tf.estimator.EstimatorSpec(
-        mode=mode, loss=loss, eval_metric_ops=eval_metric_ops)
+# 自己实现 shuffle，不依赖 sklearn
+def shuffle(a, b):
+    p = np.random.permutation(len(a))
+    return a[p], b[p]
 
 
-def main(unused_argv):
-    # Load training and eval data
-    mnist = input_data.read_data_sets(DATA_DIR, one_hot=False, validation_size=0)
-    train_data = mnist.train.images  # Returns np.array
-    train_labels = np.asarray(mnist.train.labels, dtype=np.int32)
-    train_data, train_labels = shuffle(train_data, train_labels)
-    eval_data = mnist.test.images  # Returns np.array
-    eval_labels = np.asarray(mnist.test.labels, dtype=np.int32)
-    eval_data, eval_labels = shuffle(eval_data, eval_labels)
+# 读取数据（和你原来完全一样）
+def load_mnist(path, kind='train'):
+    labels_path = os.path.join(path, f'{kind}-labels-idx1-ubyte.gz')
+    images_path = os.path.join(path, f'{kind}-images-idx3-ubyte.gz')
 
-    # Create the Estimator
-    mnist_classifier = tf.estimator.Estimator(
-        model_fn=cnn_model_fn, model_dir="/tmp/mnist_convnet_model")
-
-    # Train the model
-    train_input_fn = tf.estimator.inputs.numpy_input_fn(
-        x={"x": train_data},
-        y=train_labels,
-        batch_size=400,
-        num_epochs=None,
-        shuffle=True)
-
-    # Evaluate the model and print results
-    eval_input_fn = tf.estimator.inputs.numpy_input_fn(
-        x={"x": eval_data},
-        y=eval_labels,
-        num_epochs=1,
-        shuffle=False)
-
-    for j in range(100):
-        mnist_classifier.train(
-            input_fn=train_input_fn,
-            steps=2000)
-
-        eval_results = mnist_classifier.evaluate(input_fn=eval_input_fn)
-        print(eval_results)
+    with gzip.open(labels_path, 'rb') as lbpath:
+        labels = np.frombuffer(lbpath.read(), dtype=np.uint8, offset=8)
+    with gzip.open(images_path, 'rb') as imgpath:
+        images = np.frombuffer(imgpath.read(), dtype=np.uint8, offset=16).reshape(len(labels), 784)
+    return images, labels
 
 
-if __name__ == "__main__":
-    tf.app.run()
+# 路径
+DATA_DIR = '../data/fashion'
+
+# ====================== 模型和你原来完全一样 ======================
+model = tf.keras.Sequential([
+    tf.keras.layers.Reshape((28, 28, 1), input_shape=(784,)),
+
+    # Conv1
+    tf.keras.layers.Conv2D(32, (5, 5), padding='same', activation='relu'),
+    tf.keras.layers.MaxPooling2D((2, 2)),
+
+    # Conv2
+    tf.keras.layers.Conv2D(64, (5, 5), padding='same', activation='relu'),
+    tf.keras.layers.MaxPooling2D((2, 2)),
+
+    tf.keras.layers.Flatten(),
+
+    # Dense + Dropout
+    tf.keras.layers.Dense(1024, activation='relu'),
+    tf.keras.layers.Dropout(0.4),
+
+    # Logits
+    tf.keras.layers.Dense(10)
+])
+
+# 优化器、损失、学习率 完全不变
+model.compile(
+    optimizer=tf.keras.optimizers.SGD(learning_rate=0.001),
+    loss=tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True),
+    metrics=['accuracy']
+)
+
+# ====================== 数据加载（和你原来一样） ======================
+train_data, train_labels = load_mnist(DATA_DIR, kind='train')
+eval_data, eval_labels = load_mnist(DATA_DIR, kind='t10k')
+
+train_data = train_data.astype(np.float32)
+eval_data = eval_data.astype(np.float32)
+
+train_labels = train_labels.astype(np.int32)
+eval_labels = eval_labels.astype(np.int32)
+
+train_data, train_labels = shuffle(train_data, train_labels)
+eval_data, eval_labels = shuffle(eval_data, eval_labels)
+
+# ===================== 训练循环 =====================
+acc_history = []   # 用来真实存储每一轮准确率
+for j in range(100):
+    print(f"\n========== 第 {j + 1} 轮训练 ==========")
+    model.fit(train_data, train_labels, batch_size=400, epochs=1, shuffle=True)
+    print(f"\n========== 第 {j + 1} 轮评估 ==========")
+    loss, acc = model.evaluate(eval_data, eval_labels)
+    print(f"准确率: {acc:.4f}")
+    acc_history.append(acc)
+
+# 绘制真实 100 轮准确率曲线
+plt.figure(figsize=(9,4))
+plt.plot(range(1, 101), acc_history, color='#2c3e50', linewidth=1.5)
+plt.grid(alpha=0.25)
+plt.xlabel('Epochs')
+plt.ylabel('Test Accuracy')
+plt.title('CNN Model Training Accuracy (100 Epochs)')
+plt.tight_layout()
+plt.savefig('../cnn_100ep_real.png', dpi=300)
+plt.show()
+# ===================== 直接加在 convnet.py 最后 =====================
+
+ood_images = np.load('../data/fashion/ood_test_images.npy')
+ood_labels = np.load('../data/fashion/test_labels.npy')
+ood_gray = ood_images.reshape(-1,3).mean(axis=1).reshape(-1,784)/255
+print("\nOOD 准确率:", model.evaluate(ood_gray, ood_labels, verbose=0)[1])
